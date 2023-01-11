@@ -1,0 +1,6 @@
+# Create the quarterly swerb report 
+
+With this code you can generate the quartely report for the swerb data. 
+Open the R project and then the swerb_quartely_report file inside the ./reports folder.
+Inside swerb_quartely_report.rdm you have to update the end_of_quarter variable towards the top of the code.
+Then you can knit the file and it will produce the document.
