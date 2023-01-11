@@ -1,0 +1,411 @@
+---
+title: "Quartely report of swerb data"
+author: "David Jansen"
+header-includes:
+- \usepackage{fancyhdr}
+- \usepackage{lastpage}
+output:
+  pdf_document: default
+keep_tex: yes
+classoption: landscape
+---
+
+<!--- Define Headers and Footers --->
+\fancypagestyle{plain}{%
+  \renewcommand{\headrulewidth}{0pt}%
+  \fancyhf{}%
+  \fancyfoot[R]{\footnotesize Page \thepage\, of\, \pageref*{LastPage}}
+  \setlength\footskip{0pt}
+}
+
+\pagestyle{plain}
+
+```{r, include=FALSE}
+end_of_quarter <- lubridate::ymd('2022-12-31')
+```
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE,
+                      eval = TRUE, 
+                      warning = FALSE,
+                      message = FALSE,
+#                     fig.fullwidth = TRUE,
+                      fig.height = 8, fig.width = 11,
+                      include =TRUE)
+knitr::opts_knit$set(root.dir = "..")
+```
+
+This is the report for the `r scales::ordinal(lubridate::quarter(end_of_quarter))` quarter `r lubridate::year(end_of_quarter)`.
+
+\tableofcontents
+
+```{r, include = FALSE}
+library(lubridate)
+library(RPostgreSQL)
+library(tidyverse)
+library(gridExtra)
+library(grid)
+library(ggplot2)
+```
+
+# Swerb data
+```{r}
+observer_colors <- c("ILS" = "#4b6cf2",
+                     "JKW" = "#FF3200", 
+                     "RSM" = "#1BB6AF", 
+                     #"SNS" = "#E9A17C", 
+                     "multiple" = "#878787",
+                     "no observers" = "#d8d6d6") 
+
+observer_colors <- c("ILS" = "#4b6cf2",
+                     "JKW" = "#FF3200", 
+                     "RSM" = "#1BB6AF"
+                     #,"SNS" = "#E9A17C"
+                     ) 
+
+observer_sizes <- c("ILS" = 5,
+                     "JKW" = 5, 
+                     "RSM" = 5, 
+                     #"SNS" = 5, 
+                     "multiple" = 3,
+                     "no observers" = 3) 
+
+adcode_colors <- c("Descent, before arrival" = "#878787", 
+                   "MDT observed" = "#FF3200", 
+                   "Descent, time unknown" = "#1BB6AF",
+                   "MAT observed" = "#4b6cf2",
+                   "Ascent, after departure" = "#d8d6d6") 
+
+driver_colors <-   c(#"ILS" = "#4b6cf2",
+                     "JKW" = "#FF3200", 
+                     "BOO" = "#1BB6AF", 
+                     "GYM" = "#E9A17C", 
+                     "ALM" = "#f1f507",
+                     "multiple" = "#878787",
+                     "no drivers" = "#d8d6d6") 
+
+driver_sizes <- c(#"ILS" = 5,
+                     "JKW" = 5, 
+                     "BOO" = 5, 
+                     "GYM" = 5, 
+                     "ALM" = 5, 
+                     "multiple" = 3,
+                     "no drivers" = 3) 
+```
+
+```{r}
+source("./R/get_data.R")
+```
+
+```{r}
+swerb_data <-  
+  swerb_data_raw %>% 
+  arrange(date) %>% 
+  filter(between(date, end_of_quarter - years(2) + days(1), end_of_quarter)) %>%  
+  # mutate(year = fct_inorder(format(date, format="%Y"), ordered=TRUE))  %>%
+  mutate(year_quarter = fct_inorder(paste(scales::ordinal(lubridate::quarter(date)), lubridate::year(date), sep="-"), ordered=TRUE))  %>% 
+  # mutate(year_month = fct_inorder(format(date, format="%b-%y"), ordered=TRUE))  %>% 
+  mutate(time = if_else(is.na(time), depart_time, time)) %>% 
+  mutate(trip = if_else(am(hms(time))==TRUE, "Morning", "Afternoon")) %>%
+  #mutate(trip = factor(trip, levels = c("Morning", "Afternoon"))) %>%
+  group_by(did) %>% 
+  mutate(times_of_interest = if_else(event == 'B', min(time),
+                                     if_else(event == 'E', max(time), NA_character_))) %>% 
+  ungroup() %>% 
+  filter(time == times_of_interest) %>%
+  mutate(observer = ifelse(is.na(observers), "no observers",
+                           if_else(nchar(observers) > 3, "multiple", 
+                                   observers))) %>%
+  
+  mutate(driver = ifelse(is.na(drivers), "no drivers",
+                         if_else(nchar(drivers) > 3, "multiple", 
+                                 drivers))) %>%
+  mutate(travel_time = case_when(event == 'B' ~ time_length(hms(time) - hms(depart_time),unit="minute"))) %>% 
+  mutate(adcode_description = if_else(adcode_description == "Descent", "MDT observed",
+                                    if_else(adcode_description == "Ascent", "MAT observed", 
+                                            adcode_description))) %>% 
+  mutate(observer = factor(observer, levels = c("ILS", "JKW", "RSM", "SNS", "multiple", "no observers"))) %>% 
+  mutate(driver = factor(driver, levels = c("ALM", "BOO", "GYM", "JKW", "multiple", "no drivers"))) %>% 
+  mutate(adcode_description = factor(adcode_description, levels = c("Descent, before arrival", "MDT observed", 
+                                                                    "Descent, time unknown",
+                                                                    "MAT observed", "Ascent, after departure"))) %>% 
+  filter(observer %in% c("ILS", "JKW", "RSM", "SNS")) %>% 
+  filter(driver %in% c("BOO", "GYM", "ILS", "JKW", "ALM")) %>%
+  filter(!is.na(depart_time)) %>% 
+  filter(!(trip == "Afternoon" & am(hms(depart_time)))) %>% 
+  droplevels()
+
+swerb_data_outlier <- swerb_data %>%
+  left_join(swerb_data %>%
+              group_by(trip) %>% 
+              summarize(mean_depart_time =  mean(chron::times(depart_time), na.rm = TRUE),
+                        sd_depart_time = sd(hms(depart_time), na.rm = TRUE))) %>% 
+  filter(!((hms(depart_time) > hms(mean_depart_time) - 2 * seconds(sd_depart_time)) &
+        (hms(depart_time) < hms(mean_depart_time) + 2 * seconds(sd_depart_time)))) %>% 
+  mutate(depart_time = as.POSIXct(strptime(depart_time, format="%H:%M:%S")))
+
+
+swerb_data_outlier <- swerb_data_outlier %>% 
+  select(trip, year_quarter, observer, depart_time) %>% 
+  arrange(year_quarter, depart_time) %>% 
+  complete(observer, nesting(trip, year_quarter)) %>% 
+    filter(observer %in% c("ILS", "JKW", "SNS", "RSM")) %>% 
+  droplevels()
+  
+swerb_data <- swerb_data %>%
+  left_join(swerb_data %>%
+              group_by(trip) %>% 
+              summarize(mean_depart_time =  mean(chron::times(depart_time), na.rm = TRUE),
+                        sd_depart_time = sd(hms(depart_time), na.rm = TRUE))) %>% 
+  filter(((hms(depart_time) > hms(mean_depart_time) - 2 * seconds(sd_depart_time)) &
+        (hms(depart_time) < hms(mean_depart_time) + 2 * seconds(sd_depart_time)))) 
+
+swerb_summary_quarterly <- swerb_data %>%
+  filter(!is.na(depart_time)) %>%
+  group_by(observer, year_quarter, trip) %>%
+    summarise(average_depart_time = mean(chron::times(depart_time), na.rm = TRUE),
+              average_travel_time = mean(travel_time, na.rm = TRUE),
+              sd_travel_time = sd(travel_time, na.rm = TRUE),
+              trips = n(),
+              missing_time = sum(is.na(depart_time))
+              ) %>% 
+  ungroup() %>% 
+  mutate(average_depart_time = as.POSIXct(strptime(average_depart_time, format="%H:%M:%S"))) %>% 
+  mutate(trips = if_else(observer %in% c("no observers", "multiple"), NA_integer_, trips))
+
+swerb_summary_observer <- swerb_data %>%
+  filter(!is.na(depart_time)) %>%
+  ## create filter to only get data for last year
+  filter(between(date, left = end_of_quarter - years(1) + days(1), right = end_of_quarter)) %>% 
+  group_by(observer, trip) %>%
+  summarise(average_depart_time = mean(chron::times(depart_time), na.rm = TRUE),
+            average_travel_time = mean(travel_time, na.rm = TRUE),
+            sd_travel_time = sd(travel_time, na.rm = TRUE),
+            trips = n(),
+            missing_time = sum(is.na(depart_time))
+              ) %>% 
+  ungroup() %>% 
+  mutate(average_depart_time = as.POSIXct(strptime(average_depart_time, format="%H:%M:%S"))) %>% 
+  mutate(trips = if_else(observer %in% c("no observers", "multiple"), NA_integer_, trips))
+
+swerb_summary_observer_yearly <- swerb_data %>%
+  filter(!is.na(depart_time)) %>%
+  ## create filter to only get data for last year
+  filter(between(date, left = end_of_quarter - years(2) + days(1), right = end_of_quarter)) %>% 
+  group_by(observer, trip) %>%
+  summarise(average_depart_time = mean(chron::times(depart_time), na.rm = TRUE),
+            average_travel_time = mean(travel_time, na.rm = TRUE),
+            sd_travel_time = sd(travel_time, na.rm = TRUE),
+            trips = n(),
+            missing_time = sum(is.na(depart_time))
+              ) %>% 
+  ungroup() %>% 
+  mutate(average_depart_time = as.POSIXct(strptime(average_depart_time, format="%H:%M:%S"))) %>% 
+  mutate(trips = if_else(observer %in% c("no observers", "multiple"), NA_integer_, trips))
+
+swerb_summary_observer_quarter <- swerb_data %>%
+  filter(!is.na(depart_time)) %>%
+  ## create filter to only get data for quarter
+  filter(between(date, left = end_of_quarter %m-% months(3) %m+% days(1), right = end_of_quarter)) %>% 
+  group_by(observer, trip) %>%
+  summarise(average_depart_time = mean(chron::times(depart_time), na.rm = TRUE),
+            average_travel_time = mean(travel_time, na.rm = TRUE),
+            sd_travel_time = sd(travel_time, na.rm = TRUE),
+            trips = n(),
+            missing_time = sum(is.na(depart_time))
+              ) %>% 
+  ungroup() %>% 
+  mutate(average_depart_time = as.POSIXct(strptime(average_depart_time, format="%H:%M:%S"))) %>% 
+  mutate(trips = if_else(observer %in% c("no observers", "multiple"), NA_integer_, trips))
+
+options(digits = 1)
+
+dt_am_table <- swerb_summary_observer_yearly %>%
+  filter(trip=="Morning") %>% 
+  mutate("average depart time\n last 2 years" = 
+           format(average_depart_time, format='%H:%M')) %>%
+  select(observer, "average depart time\n last 2 years") %>% 
+  inner_join(swerb_summary_observer_quarter %>%
+               filter(trip=="Morning") %>%
+               mutate("average depart time\n this quarter" = 
+               format(average_depart_time, format='%H:%M')) %>% 
+               select(observer, "average depart time\n this quarter"))
+
+dt_pm_table <- swerb_summary_observer_yearly %>%
+  filter(trip=="Afternoon") %>% 
+  mutate("average depart time\n last 2 years" = 
+           format(average_depart_time, format='%H:%M')) %>%
+  select(observer, "average depart time\n last 2 years") %>% 
+  inner_join(swerb_summary_observer_quarter %>%
+               filter(trip=="Afternoon") %>%
+               mutate("average depart time\n this quarter" = 
+               format(average_depart_time, format='%H:%M')) %>% 
+               select(observer, "average depart time\n this quarter"))
+
+tt_am_table <- swerb_summary_observer %>%
+  filter(trip=="Morning") %>% 
+  mutate("average travel time" = average_travel_time) %>% 
+  select(observer, "average travel time") 
+
+tt_pm_table <- swerb_summary_observer %>%
+  filter(trip=="Afternoon") %>% 
+  mutate("average travel time" = average_travel_time) %>% 
+  select(observer, "average travel time") 
+
+tt_table <- swerb_summary_observer %>%
+  mutate("average travel time" = average_travel_time) %>% 
+  select(observer, trip, "average travel time") %>% 
+  spread(key = trip, value = "average travel time")
+
+library(gridExtra)
+tt2 <- ttheme_default(base_size = 7, base_colour = "black",
+                      parse = FALSE, padding = unit(c(2, 2), "mm"))
+```
+
+## Depart times
+```{r, depart_times_monthly}
+dt <- swerb_summary_quarterly %>% 
+  arrange(desc(observer)) %>% 
+ filter(observer %in% c("ILS", "JKW", "SNS", "RSM")) %>% 
+  mutate(y_min = if_else(trip == "Morning", 
+                        as.POSIXct(strptime("5:00:00", format="%H:%M:%S")),
+                        as.POSIXct(strptime("12:00:00", format="%H:%M:%S"))),
+         y_max = if_else(trip == "Morning", 
+                        as.POSIXct(strptime("5:45:00", format="%H:%M:%S")),
+                        as.POSIXct(strptime("12:45:00", format="%H:%M:%S")))) %>%
+  ggplot(aes(x=year_quarter, y=average_depart_time, color = observer, group = observer)) + 
+    geom_blank(aes(y = y_min)) +
+    geom_blank(aes(y = y_max)) +
+    geom_point(aes(size = observer),position=position_dodge(width = .4)) +
+    geom_point(data = swerb_data_outlier,  aes(y = depart_time),shape = 8,
+               position=position_dodge(width = .4),
+               show.legend = FALSE) +
+    scale_size_manual(values = observer_sizes, guide = 'none') +
+    geom_text(aes(label=trips), size = 2, color = "black", position=position_dodge(width = .4)) +
+    facet_wrap(~trip, nrow=2, scales = "free_y") +
+    scale_color_manual(values=observer_colors)  +
+    annotation_custom(tableGrob(dt_am_table, theme = tt2),
+                      xmin=6,
+                      ymin=as.POSIXct(strptime("5:00:00", format="%H:%M:%S")), 
+                      ymax = as.POSIXct(strptime("5:25:00", format="%H:%M:%S"))) +
+    annotation_custom(tableGrob(dt_pm_table, theme = tt2),
+                      xmin=6,
+                      ymin=as.POSIXct(strptime("13:00:00", format="%H:%M:%S")), 
+                      ymax = as.POSIXct(strptime("13:25:00", format="%H:%M:%S"))) +
+    ggtitle("Average depart times from camp") +
+    # xlab("Year-month") +
+    ylab("Time") +
+    ggthemes::theme_tufte(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 90)
+          , legend.position = 'bottom'
+          , panel.grid.major.y = element_line( size=.1, color="black" )
+          , panel.background = element_rect(fill = NA, color = "black")
+          )
+
+dt + labs(caption="Table has the average values calculated over 2 running years as well as last quarter,\n dots are the mean for that quarter (numbers inside dots are the number of trips by that observer)\n stars are outliers (2SD away from mean)")
+```
+
+
+## Travel times
+### Monthly
+```{r, travel_time_monthly}
+plot_tt <- swerb_summary_quarterly %>% 
+  filter(!(trip == "Afternoon" & average_depart_time < as.POSIXct(strptime("12:00:00", format="%H:%M:%S")))) %>% 
+  ggplot(aes(x=year_quarter, y=average_travel_time, color = observer)) + 
+    geom_point(aes(size = observer), position=position_dodge(width = .4)) +
+    geom_errorbar(aes(ymin=average_travel_time - sd_travel_time, 
+                      ymax=average_travel_time + sd_travel_time), 
+                  position=position_dodge(width = .4), size = 0.25) +
+    scale_size_manual(values = observer_sizes, guide = 'none') +
+    geom_text(aes(label=trips), size = 2, color = "black", position=position_dodge(width = .4)) +
+    facet_wrap(~trip, nrow=2) +
+    scale_y_continuous(breaks = seq(45,120,by = 15)) +
+    scale_color_manual(values=observer_colors)  +
+    # annotation_custom(tableGrob(tt_table, theme = tt2),
+    #                     xmin=7,
+    #                     ymax= 40) +
+    ggtitle("Average travel times from camp to first group") +
+    # xlab("Year-month") +
+    ylab("Duration in minutes") +
+    ggthemes::theme_tufte() +
+    theme(axis.text.x = element_text(angle = 90)
+          , legend.position = 'bottom'
+          , panel.grid.major.y = element_line( size=.1, color="black" )
+          , panel.background = element_rect(fill = NA, color = "black")
+          )  +
+  labs(caption="Table has the average values calculated over running years, dots are the mean for that quarter and numbers inside dots are the number of trips by that observer",
+       color = "Observer",size = NA) 
+
+plot_tt
+  
+```
+
+
+## Ascent and descent times
+### Observers
+```{r}
+brks <- c(0, 0.25, 0.5, 0.75, 1)
+
+adcode_colors <- c("Descent, before arrival" = "#878787", 
+                   "MDT observed" = "#FF3200", 
+                   "Descent, time unknown" = "#1BB6AF",
+                   "MAT observed" = "#4b6cf2",
+                   "Ascent, after departure" = "#d8d6d6") 
+
+
+swerb_data %>% 
+  filter(nchar(observers) == 3) %>%
+  filter(observer != "SNS") %>% 
+  filter((trip == "Morning" & event == "B") |  trip == "Afternoon" & event == "E") %>%
+  filter(!is.na(observers)) %>%
+  group_by(observer, year_quarter, trip) %>%
+  mutate(trips=n()) %>% 
+  group_by(observer, year_quarter, trip, trips, adcode_description) %>%
+  summarise(counts=n()) %>% 
+  mutate(perc=counts/trips) %>%
+  ggplot(aes(x = factor(year_quarter), y = perc, fill = factor(adcode_description))) +
+    geom_bar(stat="identity", width = 0.7) +
+    geom_text(aes(label=trips, factor(year_quarter), y = 0.1), size = 3, color = "black") +
+    scale_y_continuous(breaks = brks, labels = scales::percent(brks)) +
+    labs(x = "Year-month", y = "Percentages", fill = "Ascent and Descent codes") +
+    scale_fill_manual(values=adcode_colors)  +
+    facet_grid(trip~observer) +
+    ggtitle("Proportion of adcodes") +
+    ggthemes::theme_tufte() +
+    theme(axis.text.x = element_text(angle = 90)
+          , legend.position = 'bottom'
+          , panel.grid.major.y = element_line( size=.1, color="black" )
+          , panel.background = element_rect(fill = NA, color = "black")
+          )
+```
+
+### Drivers
+```{r}
+brks <- c(0, 0.25, 0.5, 0.75, 1)
+
+swerb_data %>% 
+  filter(nchar(drivers) == 3) %>%
+  filter((trip == "Morning" & event == "B") |  trip == "Afternoon" & event == "E") %>%
+  filter(!is.na(observers)) %>%
+  filter(driver != 'JKW') %>%
+  group_by(driver, year_quarter, trip) %>%
+  mutate(trips=n()) %>% 
+  group_by(driver, year_quarter, trip, trips, adcode_description) %>%
+  summarise(counts=n()) %>% 
+  mutate(perc=counts/trips) %>%
+  ggplot(aes(x = factor(year_quarter), y = perc, fill = factor(adcode_description))) +
+    geom_bar(stat="identity", width = 0.7) +
+    geom_text(aes(label=trips, factor(year_quarter), y = 0.1), size = 3, color = "black") +
+    scale_y_continuous(breaks = brks, labels = scales::percent(brks)) +
+    labs(x = "Year-month", y = "Percentages", fill = "Ascent and Descent codes") +
+    scale_fill_manual(values=adcode_colors)  +
+    facet_grid(trip~driver) +
+    ggtitle("Proportion of adcodes") +
+    ggthemes::theme_tufte() +
+    theme(axis.text.x = element_text(angle = 90)
+          , legend.position = 'bottom'
+          , panel.grid.major.y = element_line( size=.1, color="black" )
+          )
+```
+
