@@ -41,16 +41,17 @@ This is the report for the `r scales::ordinal(lubridate::quarter(end_of_quarter)
 \tableofcontents
 
 ```{r, include = FALSE}
-library(lubridate)
-library(RPostgreSQL)
-library(tidyverse)
-library(gridExtra)
-library(grid)
-library(ggplot2)
+list.of.packages <- list("lubridate", "RPostgreSQL", "tidyverse", "gridExtra", "grid", "ggplot2")
+
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if (length(new.packages)) install.packages(unlist(new.packages))
+lapply(list.of.packages, require, character.only = T)
 ```
 
 # Swerb data
 ```{r}
+## The next part sets the colors and other aesthetics
+
 observer_colors <- c("ILS" = "#4b6cf2",
                      "JKW" = "#FF3200", 
                      "RSM" = "#1BB6AF", 
@@ -95,17 +96,19 @@ driver_sizes <- c(#"ILS" = 5,
 ```
 
 ```{r}
+## This parts gets the data
 source("./R/get_data.R")
 ```
 
 ```{r}
+## getting data ready with some time and date related mutations
+## it also adds data on observers and drivers
+
 swerb_data <-  
   swerb_data_raw %>% 
   arrange(date) %>% 
   filter(between(date, end_of_quarter - years(2) + days(1), end_of_quarter)) %>%  
-  # mutate(year = fct_inorder(format(date, format="%Y"), ordered=TRUE))  %>%
   mutate(year_quarter = fct_inorder(paste(scales::ordinal(lubridate::quarter(date)), lubridate::year(date), sep="-"), ordered=TRUE))  %>% 
-  # mutate(year_month = fct_inorder(format(date, format="%b-%y"), ordered=TRUE))  %>% 
   mutate(time = if_else(is.na(time), depart_time, time)) %>% 
   mutate(trip = if_else(am(hms(time))==TRUE, "Morning", "Afternoon")) %>%
   #mutate(trip = factor(trip, levels = c("Morning", "Afternoon"))) %>%
@@ -130,12 +133,14 @@ swerb_data <-
   mutate(adcode_description = factor(adcode_description, levels = c("Descent, before arrival", "MDT observed", 
                                                                     "Descent, time unknown",
                                                                     "MAT observed", "Ascent, after departure"))) %>% 
+  ## Filter on common observers and drivers                                                                    
   filter(observer %in% c("ILS", "JKW", "RSM", "SNS")) %>% 
   filter(driver %in% c("BOO", "GYM", "ILS", "JKW", "ALM")) %>%
   filter(!is.na(depart_time)) %>% 
   filter(!(trip == "Afternoon" & am(hms(depart_time)))) %>% 
   droplevels()
 
+## calculate outliers in depart times
 swerb_data_outlier <- swerb_data %>%
   left_join(swerb_data %>%
               group_by(trip) %>% 
@@ -153,6 +158,7 @@ swerb_data_outlier <- swerb_data_outlier %>%
     filter(observer %in% c("ILS", "JKW", "SNS", "RSM")) %>% 
   droplevels()
   
+## gettings ome mean values for the table  
 swerb_data <- swerb_data %>%
   left_join(swerb_data %>%
               group_by(trip) %>% 
@@ -161,6 +167,7 @@ swerb_data <- swerb_data %>%
   filter(((hms(depart_time) > hms(mean_depart_time) - 2 * seconds(sd_depart_time)) &
         (hms(depart_time) < hms(mean_depart_time) + 2 * seconds(sd_depart_time)))) 
 
+## get a summary of the quarterly data
 swerb_summary_quarterly <- swerb_data %>%
   filter(!is.na(depart_time)) %>%
   group_by(observer, year_quarter, trip) %>%
@@ -174,6 +181,7 @@ swerb_summary_quarterly <- swerb_data %>%
   mutate(average_depart_time = as.POSIXct(strptime(average_depart_time, format="%H:%M:%S"))) %>% 
   mutate(trips = if_else(observer %in% c("no observers", "multiple"), NA_integer_, trips))
 
+## get a summary of the per observer
 swerb_summary_observer <- swerb_data %>%
   filter(!is.na(depart_time)) %>%
   ## create filter to only get data for last year
@@ -221,6 +229,7 @@ swerb_summary_observer_quarter <- swerb_data %>%
 
 options(digits = 1)
 
+## make the tables that appear in the plots
 dt_am_table <- swerb_summary_observer_yearly %>%
   filter(trip=="Morning") %>% 
   mutate("average depart time\n last 2 years" = 
@@ -258,6 +267,7 @@ tt_table <- swerb_summary_observer %>%
   select(observer, trip, "average travel time") %>% 
   spread(key = trip, value = "average travel time")
 
+## some details to help with the tables
 library(gridExtra)
 tt2 <- ttheme_default(base_size = 7, base_colour = "black",
                       parse = FALSE, padding = unit(c(2, 2), "mm"))
