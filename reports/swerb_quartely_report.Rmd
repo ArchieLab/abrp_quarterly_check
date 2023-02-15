@@ -41,7 +41,7 @@ This is the report for the `r scales::ordinal(lubridate::quarter(end_of_quarter)
 \tableofcontents
 
 ```{r, include = FALSE}
-list.of.packages <- list("lubridate", "RPostgreSQL", "tidyverse", "gridExtra", "grid", "ggplot2")
+list.of.packages <- list("lubridate", "RPostgreSQL", "tidyverse", "gridExtra", "grid", "ggplot2", "rstudioapi")
 
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
 if (length(new.packages)) install.packages(unlist(new.packages))
