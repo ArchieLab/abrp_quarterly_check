@@ -1,5 +1,8 @@
 # Create the quarterly swerb report 
 
+You need to have a vpn connection to Duke and a ssh tunnel to the server.
+ssh -L 22222:localhost:5432 DUKEUSERNAME@papio.biology.duke.edu
+
 With this code you can generate the quartely report for the swerb data. 
 Open the R project and then the swerb_quartely_report file inside the ./reports folder.
 Inside swerb_quartely_report.rdm you have to update the end_of_quarter variable towards the top of the code.
