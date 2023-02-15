@@ -8,9 +8,9 @@ babase <- DBI::dbConnect(
   RPostgreSQL::PostgreSQL(),
   host = "localhost",
   port = 22222,
-  user = "jansen",
+  user = rstudioapi::askForPassword(prompt = "Please enter your babase username"),
   dbname = "babase",
-  password = "Bab00n3455")
+  password = rstudioapi::askForPassword(prompt = "Please enter your babase password"))
 
 # if(!("babase" %in% ls())) {
 #   print("make sure you have a vpn connection with Duke and a ssh tunnel")
